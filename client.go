@@ -23,6 +23,8 @@ type Client struct {
 	Handler Handler
 	mu      sync.Mutex // guards stop
 	stop    chan error
+	wait    int64
+	control_ch chan int
 }
 
 // ConnectAndWork connects on the c.Network and c.Addr and then
@@ -39,8 +41,9 @@ func (c *Client) ConnectAndWork() error {
 
 // ConnectAndWork creates a client, connects to the beanstalk instance and
 // reserves jobs to be processed by Handler.
-func ConnectAndWork(network string, addr string, handler Handler) error {
-	client := &Client{Network: network, Addr: addr, Handler: handler}
+func ConnectAndWork(network string, addr string, wait int64, max int64, handler Handler) error {
+	client := &Client{Network: network, Addr: addr, wait: wait,Handler: handler}
+	client.control_ch = make(chan int, max)
 	return client.ConnectAndWork()
 }
 
@@ -61,14 +64,13 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 	defer wg.Wait()
 
 	for {
-		wait := time.Second // how long to sleep when no jobs in queues
+		wait := time.Duration(c.wait) * time.Millisecond // how long to sleep when no jobs in queues
 
 		for name, tube := range tubes {
 			id, body, err := tube.Reserve(0 /* don't block others */)
 			if err == nil {
-				wait = 0 // drain the queue as fast as possible
 				wg.Add(1)
-				go c.work(wg, NewJob(bs, name, id, body))
+				c.work(wg, NewJob(bs, name, id, body))
 			} else if !isTimeoutOrDeadline(err) {
 				c.Stop()
 				return err
