@@ -39,13 +39,15 @@ func Example() {
 		job.Release(0, 0)
 	}))
 
-	ConnectAndWork("tcp", "localhost:11300", mux)
+	ConnectAndWork("tcp", "localhost:11300", 1, 1, mux)
 }
 
 func TestStopClient(t *testing.T) {
 	client := &Client{
-		Network: "tcp",
-		Addr:    "localhost:11300",
+		Network:    "tcp",
+		Addr:       "localhost:11300",
+		MaxControl: make(chan int, 1),
+		wait:       10,
 		Handler: HandlerFunc(func(job *Job) {
 		}),
 	}
@@ -63,6 +65,7 @@ func TestStopClient(t *testing.T) {
 
 func TestUnexpectedErrorReturned(t *testing.T) {
 	client := &Client{
+		MaxControl: make(chan int, 1),
 		Handler: HandlerFunc(func(job *Job) {
 		}),
 	}
@@ -80,7 +83,7 @@ func TestClientStopsOnSIGTERM(t *testing.T) {
 		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 	}()
 
-	err := ConnectAndWork("tcp", "localhost:11300", HandlerFunc(func(job *Job) {}))
+	err := ConnectAndWork("tcp", "localhost:11300", 1, 1, HandlerFunc(func(job *Job) {}))
 	if err != ErrClientHasQuit {
 		t.Fail()
 	}
@@ -92,7 +95,7 @@ func TestClientStopsOnSIGINT(t *testing.T) {
 		syscall.Kill(syscall.Getpid(), syscall.SIGINT)
 	}()
 
-	err := ConnectAndWork("tcp", "localhost:11300", HandlerFunc(func(job *Job) {}))
+	err := ConnectAndWork("tcp", "localhost:11300", 1, 1, HandlerFunc(func(job *Job) {}))
 	if err != ErrClientHasQuit {
 		t.Fail()
 	}
@@ -122,7 +125,7 @@ func TestReserveIsParallelAndWaits(t *testing.T) {
 		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 	}()
 
-	ConnectAndWork("tcp", "localhost:11300", mux)
+	ConnectAndWork("tcp", "localhost:11300", 1, 5, mux)
 
 	if count != 5 || time.Since(start) > time.Duration(time.Millisecond*2200) {
 		t.Fail()

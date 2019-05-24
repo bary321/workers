@@ -18,13 +18,13 @@ var ErrClientHasQuit = errors.New("client has quit")
 
 // Client defines parameters for running an beanstalk client.
 type Client struct {
-	Network string
-	Addr    string
-	Handler Handler
-	mu      sync.Mutex // guards stop
-	stop    chan error
-	wait    int64
-	control_ch chan int
+	Network    string
+	Addr       string
+	Handler    Handler
+	mu         sync.Mutex // guards stop
+	stop       chan error
+	wait       int64
+	MaxControl chan int
 }
 
 // ConnectAndWork connects on the c.Network and c.Addr and then
@@ -42,8 +42,8 @@ func (c *Client) ConnectAndWork() error {
 // ConnectAndWork creates a client, connects to the beanstalk instance and
 // reserves jobs to be processed by Handler.
 func ConnectAndWork(network string, addr string, wait int64, max int64, handler Handler) error {
-	client := &Client{Network: network, Addr: addr, wait: wait,Handler: handler}
-	client.control_ch = make(chan int, max)
+	client := &Client{Network: network, Addr: addr, wait: wait, Handler: handler}
+	client.MaxControl = make(chan int, max)
 	return client.ConnectAndWork()
 }
 
@@ -67,15 +67,18 @@ func (c *Client) Reserve(conn io.ReadWriteCloser) error {
 		wait := time.Duration(c.wait) * time.Millisecond // how long to sleep when no jobs in queues
 
 		for name, tube := range tubes {
-			id, body, err := tube.Reserve(0 /* don't block others */)
-			if err == nil {
-				wg.Add(1)
-				c.work(wg, NewJob(bs, name, id, body))
-			} else if !isTimeoutOrDeadline(err) {
-				c.Stop()
-				return err
-			}
 			select {
+			case c.MaxControl <- 0:
+				id, body, err := tube.Reserve(0 /* don't block others */)
+				if err == nil {
+					wg.Add(1)
+					go c.work(wg, NewJob(bs, name, id, body))
+				} else if !isTimeoutOrDeadline(err) {
+					c.Stop()
+					return err
+				} else {
+					<-c.MaxControl
+				}
 			case <-c.stop:
 				return ErrClientHasQuit
 			default:
@@ -115,6 +118,7 @@ func (c *Client) tubes(conn *beanstalk.Conn) map[string]*beanstalk.TubeSet {
 func (c *Client) work(wg *sync.WaitGroup, j *Job) {
 	defer wg.Done()
 	c.Handler.Work(j)
+	<-c.MaxControl
 }
 
 func (c *Client) quitOnSignal(wg *sync.WaitGroup) {
